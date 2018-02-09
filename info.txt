@@ -1,0 +1,143 @@
+jenkins section:
+https://github.com/yongshin/leroy-jenkins
+
+Dockerfile:
+FROM jenkins:latest
+USER root
+RUN apt-get update \
+  && apt-get install -y apt-transport-https ca-certificates curl software-properties-common \
+  && curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add - \
+  && add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable" \
+  && apt-get update && apt-get install -y docker-ce sudo \
+  && rm -rf /var/lib/apt/lists/*
+RUN echo "jenkins ALL=NOPASSWD: ALL" >> /etc/sudoers
+COPY entrypoint.sh /
+ENTRYPOINT /entrypoint.sh 
+
+File entrypoint.sh:
+sudo openssl s_client -connect ${DTR_IPADDR}:4443 -showcerts </dev/null 2>/dev/null | openssl x509 -outform PEM | sudo tee /usr/local/share/ca-certificates/${DTR_IPADDR}.crt  
+sudo update-ca-certificates
+/bin/tini -- /usr/local/bin/jenkins.sh
+
+Build the image:
+docker login   - (pamus2k)
+docker image build -t pamus2k/my-jenkins:1.0 .
+docker image push pamus2k/my-jenkins:1.0
+
+GitHUb: https://github.com/musiep1/jenkins-demo.git
+DTR:  docker pull 165.227.71.156:4443/admin/jenkins-demo
+
+make new folder: jenkins-demo and copy Dockerfile and entrypoint.sh there 
+git init - from the new dir above 
+git remote add origin https://github.com/musiep1/jenkins-demo.git
+git add *
+git commit -m "code for pipeline testing"
+git push origin master (prompted for musiep1/passwd)
+
+UCP_IP=
+curl -sk -d '{"username": "admin", "password": "Got2go09"}' https://$UCP_IP/auth/login | jq -r .auth_token
+AUTHTOKEN=e746d538-c80f-4976-b67a-9dcca3ab6467
+[centos@node-2 ~]$ mkdir jenkins
+[centos@node-2 ~]$ mkdir ucp-bundle-admin
+cd ucp-bundle-admin
+curl -k -H "Authorization: Bearer $AUTHTOKEN" https://$UCP_IP/api/clientbundle -o bundle.zip
+unzip bundle.zip
+
+[centos@node-2 ucp-bundle-admin]$ source env.sh
+[centos@node-2 ucp-bundle-admin]$ more env.sh
+export DOCKER_TLS_VERIFY=1
+export DOCKER_CERT_PATH="$(pwd)"
+export DOCKER_HOST=tcp://165.227.71.156:443
+
+From master:
+[centos@node-0 jenkins-demo]$ docker node update --label-add jenkins=master node-2.example.com
+node-2.example.com
+
+Prepare some env vars:
+[centos@node-0 jenkins-demo]$ DTR_IP=165.227.71.156
+[centos@node-0 jenkins-demo]$ USER_ID=pamus2k    (Docker store) 
+
+
+docker service create --name my-jenkins --publish 8080:8080 \
+  --mount type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock \
+  --mount type=bind,source=/home/centos/jenkins,destination=/var/jenkins_home \
+  --mount type=bind,source=/home/centos/ucp-bundle-admin,destination=/home/jenkins/ucp-bundle-admin \
+  --constraint 'node.labels.jenkins == master' \
+  --detach=false \
+  -e DTR_IP=${DTR_IP} \
+  ${USER_ID}/my-jenkins:1.0
+
+
+[centos@node-0 jenkins-demo]$ docker service ls
+ID                  NAME                MODE                REPLICAS            IMAGE                          PORTS
+axrn4z5v5jjv        my-jenkins          replicated          1/1                 pamus2k/my-jenkins:1.0         *:8080->8080/tcp
+
+[centos@node-0 jenkins-demo]$ docker service ps my-jenkins
+ID                  NAME                IMAGE                    NODE                 DESIRED STATE       CURRENT STATE            ERROR               PORTS
+t3jzysxpy5q8        my-jenkins.1        pamus2k/my-jenkins:1.0   node-2.example.com   Running             Running 54 seconds ago
+
+
+Unlock Jenkins:
+[centos@node-2 jenkins]$ docker ps
+CONTAINER ID        IMAGE                    COMMAND                  CREATED             STATUS              PORTS                 NAMES
+ff3213e7779d        pamus2k/my-jenkins:1.0   "/bin/sh -c /entry..."   4 minutes ago       Up 4 minutes        8080/tcp, 50000/tcp   node-2.example.com/my-jenkins.1.t3jzysxpy5q87xsjm0ea30j1u
+[centos@node-2 jenkins]$ docker container exec -it ff3213e7779d sh
+# cat /var/jenkins_home/secrets/initialAdminPassword
+bcae1842644946d5832baef95a5f1170
+
+Add Build step SCM execute shell:
+#!/bin/bash
+export DTR_FQDN=165.227.71.156:4443
+docker image build -t ${DTR_FQDN}/admin/jenkins-demo .
+docker image tag ${DTR_FQDN}/admin/jenkins-demo ${DTR_FQDN}/admin/jenkins-demo:1.${BUILD_NUMBER}
+docker login -u admin -p G**9 ${DTR_FQDN}
+docker image push ${DTR_FQDN}/admin/jenkins-demo:1.${BUILD_NUMBER}
+
+###########################################
+Results after making change and pushing new code to github:
+
+Started by an SCM change
+Building in workspace /var/jenkins_home/workspace/docker build and push
+ > git rev-parse --is-inside-work-tree # timeout=10
+Fetching changes from the remote Git repository
+ > git config remote.origin.url https://github.com/musiep1/jenkins-demo.git # timeout=10
+Fetching upstream changes from https://github.com/musiep1/jenkins-demo.git
+ > git --version # timeout=10
+ > git fetch --tags --progress https://github.com/musiep1/jenkins-demo.git +refs/heads/*:refs/remotes/origin/*
+ > git rev-parse refs/remotes/origin/master^{commit} # timeout=10
+ > git rev-parse refs/remotes/origin/origin/master^{commit} # timeout=10
+Checking out Revision 1864c487eba42cb489107a734c9a6f49cc5f649b (refs/remotes/origin/master)
+ > git config core.sparsecheckout # timeout=10
+ > git checkout -f 1864c487eba42cb489107a734c9a6f49cc5f649b
+Commit message: "new push #3"
+ > git rev-list --no-walk afa4ffa3a75c3e5f26ada92d592d7eef5870ee80 # timeout=10
+[docker build and push] $ /bin/bash /tmp/jenkins7669759018994965175.sh
+Sending build context to Docker daemon  65.02kB
+
+Step 1/6 : FROM jenkins:latest
+ ---> 5fc84ab0b7ad
+Step 2/6 : USER root
+ ---> Using cache
+ ---> c5cf1b0b3ad9
+Step 3/6 : RUN apt-get update   && apt-get install -y apt-transport-https ca-certificates curl software-properties-common   && curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add -   && add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable"   && apt-get update && apt-get install -y docker-ce sudo   && rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> 139da9d49188
+Step 4/6 : RUN echo "jenkins ALL=NOPASSWD: ALL" >> /etc/sudoers
+ ---> Using cache
+ ---> 51b35b0e297a
+Step 5/6 : COPY entrypoint.sh /
+ ---> 4fdaeabd1cd8
+Step 6/6 : ENTRYPOINT /entrypoint.sh
+ ---> Running in 40ee854b54f4
+ ---> b556eb06bf74
+Removing intermediate container 40ee854b54f4
+Successfully built b556eb06bf74
+Successfully tagged 165.227.71.156:4443/admin/jenkins-demo:latest
+WARNING! Using --password via the CLI is insecure. Use --password-stdin.
+Login Succeeded
+The push refers to a repository [165.227.71.156:4443/admin/jenkins-demo]
+3386fc80bd64: Preparing
+64f4c5c0249b: Preparing
+7ce1a454660d: Pushed
+1.4: digest: sha256:2a0aa1365a135fd033f5fd8923d8e9d461766195a7e309215efd9a64d83a8bf1 size: 5128
+Finished: SUCCESS
